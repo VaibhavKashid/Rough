@@ -1,0 +1,289 @@
+//Select NodeMCU 1.0 (ESP-12E Module)
+//To upload code, connect this laptop in same network as ESP8266 (Eg. Hotspot name: WATER_LEVEL)
+// Password to OTA is admin
+//Don't forget to add OTA code
+
+#define TRIG_PIN D5
+#define ECHO_PIN D6
+
+#define BUILTIN 2
+
+#include<ESP8266WiFi.h>
+WiFiServer server(80);
+
+const float LEVEL_0_CM   = 10.0;   // 0% level
+const float LEVEL_100_CM = 105.0;  // 100% level
+
+const float TANK_CAPACITY_L = 1000.0;
+
+// -------------------------------
+// Median settings
+// -------------------------------
+
+const int NUM_READINGS = 9;
+
+float readings[NUM_READINGS];
+
+void setup() 
+{
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  digitalWrite(TRIG_PIN, LOW);
+
+  Serial.println();
+  Serial.println("Water Level Indicator");
+
+  pinMode(BUILTIN, OUTPUT);
+
+  Serial.begin(115200);
+  WiFi.reconnect();
+  delay(20);
+  Serial.println("START");
+  WiFi.begin("WATER_LEVEL","12345678");
+  while(!(WiFi.status()==WL_CONNECTED))
+  {
+    delay(20);
+    Serial.print(".");
+  }
+  Serial.println("Connected");
+  Serial.println(WiFi.localIP());
+  server.begin();
+}
+
+// --------------------------------------------------
+// Function to measure one distance
+// --------------------------------------------------
+
+float getDistance()
+{
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+
+  // If no echo received
+  if (duration == 0)
+  {
+    return -1;
+  }
+
+  float distance = duration * 0.0343 / 2.0;
+
+  return distance;
+}
+
+// --------------------------------------------------
+// Function to calculate median
+// --------------------------------------------------
+
+float getMedian(float values[], int size)
+{
+  // Make a copy so original readings are not changed
+  float sorted[size];
+
+  for (int i = 0; i < size; i++)
+  {
+    sorted[i] = values[i];
+  }
+
+  // Sort values from smallest to largest
+  for (int i = 0; i < size - 1; i++)
+  {
+    for (int j = i + 1; j < size; j++)
+    {
+      if (sorted[j] < sorted[i])
+      {
+        float temp = sorted[i];
+        sorted[i] = sorted[j];
+        sorted[j] = temp;
+      }
+    }
+  }
+
+  // For 9 readings, middle value is position 4
+  return sorted[size / 2];
+}
+
+void loop() 
+{
+int validReadings = 0;
+
+  // Take 9 measurements
+  while (validReadings < NUM_READINGS)
+  {
+    float distance = getDistance();
+
+    if (distance > 0)
+    {
+      readings[validReadings] = distance;
+
+      Serial.print("Raw reading ");
+      Serial.print(validReadings + 1);
+      Serial.print(": ");
+      Serial.print(distance);
+      Serial.println(" cm");
+
+      validReadings++;
+    }
+
+    delay(100);
+  }
+
+  // Calculate median distance
+  float distance = getMedian(readings, NUM_READINGS);
+
+  // --------------------------------------------------
+  // Calculate water height
+  // --------------------------------------------------
+
+  float waterHeight = distance;
+
+  // --------------------------------------------------
+  // Calculate water percentage
+  // --------------------------------------------------
+
+  float waterPercentage =
+      ((waterHeight - LEVEL_0_CM) /
+      (LEVEL_100_CM - LEVEL_0_CM)) * 100.0;
+
+  // --------------------------------------------------
+  // Calculate water volume
+  // --------------------------------------------------
+
+  float waterLiters =
+      (waterPercentage / 100.0) * TANK_CAPACITY_L;
+
+  // --------------------------------------------------
+  // PWM calculation
+  // --------------------------------------------------
+
+  int pwmValue;
+
+  if (waterPercentage <= 0)
+  {
+    pwmValue = 250;
+  }
+  else if (waterPercentage >= 100)
+  {
+    pwmValue = 0;
+  }
+  else
+  {
+    pwmValue = map((int)waterPercentage, 0, 100, 250, 0);
+  }
+
+  analogWrite(BUILTIN, pwmValue);
+
+  // --------------------------------------------------
+  // Display results
+  // --------------------------------------------------
+
+  Serial.println();
+  Serial.println("==========================");
+
+  Serial.print("Median Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  Serial.print("Water Height: ");
+  Serial.print(waterHeight);
+  Serial.println(" cm");
+
+  if (waterPercentage < 0)
+  {
+    Serial.println("Water Level: BELOW 0%");
+    Serial.println("Water Volume: BELOW 0 L");
+  }
+  else if (waterPercentage > 100)
+  {
+    Serial.println("Water Level: ABOVE 100%");
+    Serial.println("Water Volume: ABOVE 1000 L");
+  }
+  else
+  {
+    Serial.print("Water Level: ");
+    Serial.print(waterPercentage);
+    Serial.println(" %");
+
+    Serial.print("Water: ");
+    Serial.print(waterLiters);
+    Serial.println(" Liters");
+  }
+
+  Serial.print("LED PWM: ");
+  Serial.println(pwmValue);
+
+  Serial.println("==========================");
+  Serial.println();
+
+  delay(1000);
+
+  WiFiClient client = server.available();
+  if(!client)
+  {
+    delay(30);
+    return;
+  }
+
+  while(!client.available())
+  {
+    delay(30);
+  }
+
+  client.println(" WATER LEVEL INDICATOR   \n\n\n\n\n    ");
+
+  int water = int(waterPercentage);
+  int liter = int(waterLiters);
+
+  if(water<5)
+  {
+    client.println(" WATER LEVEL IS: 100% \n ");
+    Serial.println("WATER LEVEL IS: 100% \n ");
+    delay(50);
+    client.println("|-            |------------------|\n");
+    client.println("|-            |------------------|\n");
+    client.println("|-            |------------------|\n");
+    client.println("|-            |-------FULL-------|\n");
+    client.println("|-            |------------------|\n");
+    client.println("|-            |------------------|\n");
+    client.println("|-            |------------------|\n");
+    client.println("|-            |__________________| \n");
+  }
+
+  else if(water>95)
+  {
+    delay(500);
+    client.println(" \n\n  WATER TANK IS EMPTY ");
+    client.println(" \n           _______            ");
+    client.println(" \n          /                   ");
+    client.println(" \n         /  O   O             ");
+    client.println(" \n        |   _____             ");
+    client.println(" \n          _________/          ");
+    delay(50);
+  }
+
+  else if(water>5 && water <95)
+  {
+    client.println(" WATER LEVEL IS: ");
+    Serial.println("WATER LEVEL IS: ");
+    delay(50);
+    client.println(waterPercentage);
+    Serial.println(waterPercentage);
+    Serial.print("\n AND \n ");
+    Serial.print("Water available: ");
+    Serial.println(waterLiters);
+  }
+  else
+  {
+    Serial.println(" ERROR ");
+    client.println(" ERROR ");
+    delay(50);
+  }
+  delay(1);
+}
