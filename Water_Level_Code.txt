@@ -2,6 +2,7 @@
 //To upload code, connect this laptop in same network as ESP8266 (Eg. Hotspot name: WATER_LEVEL)
 // Password to OTA is admin
 //Don't forget to add OTA code
+//Changes made
 
 #define TRIG_PIN D5
 #define ECHO_PIN D6
